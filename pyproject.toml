@@ -1,0 +1,32 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "mountain_waves"
+version = "0.1.0"
+description = "Interactive 2-D mountain-wave model with Rust core and Dash front end. Port of Robert E. Hart's 1995 MATLAB mountain-wave tool."
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [{ name = "Mountain Waves port (Rust + Dash)" }]
+maintainers = [{ name = "Mountain Waves port (Rust + Dash)" }]
+license = { text = "MIT" }
+keywords = ["meteorology", "mountain-waves", "atmospheric-science", "taylor-goldstein", "scorer-parameter"]
+dependencies = [
+    "numpy>=1.23",
+    "scipy>=1.10",
+    "dash>=2.16",
+    "plotly>=5.20",
+]
+
+[project.urls]
+"Original model (Hart 1995)" = "https://moe.met.fsu.edu/~rhart/mtnwave.html"
+
+[project.optional-dependencies]
+dev = ["maturin>=1.7", "pytest>=7"]
+
+[tool.maturin]
+# Mixed layout: Rust crate at project root, Python package under python/.
+python-source = "python"
+module-name = "mountain_waves._core"
+features = ["pyo3/extension-module"]

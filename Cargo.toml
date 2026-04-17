@@ -1,0 +1,27 @@
+[package]
+name = "mountain_waves_core"
+version = "0.1.0"
+edition = "2021"
+description = "Rust core for the Mountain Waves interactive visualization tool. Port of Robert E. Hart's 1995 MATLAB mountain-wave model (https://moe.met.fsu.edu/~rhart/mtnwave.html)."
+authors = [
+    "Robert E. Hart <rhart@fsu.edu> (original MATLAB model, 1995)",
+    "Mountain Waves port (Rust + Dash)",
+]
+license = "MIT"
+
+[lib]
+name = "_core"
+# cdylib is required for a PyO3 Python extension module.
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.22", features = ["extension-module"] }
+numpy = "0.22"
+ndarray = "0.16"
+num-complex = "0.4"
+rayon = "1.10"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
