@@ -67,7 +67,12 @@ ENV HOME=/tmp \
     XDG_CACHE_HOME=/tmp/.cache \
     MPLCONFIGDIR=/tmp/.mplconfig
 
-COPY python ./python
+# Note: we intentionally do NOT copy python/ into the runtime image. The wheel
+# built in the previous stage contains both the pure-Python source and the
+# compiled _core*.so, installed into site-packages. If we also copied the
+# source tree here, run.py's sys.path.insert(0, "./python") would shadow the
+# wheel's copy with a _core-less source tree, and `from . import _core` would
+# fail with "partially initialized module" (HF deploy 2026-04-18).
 COPY run.py ./run.py
 
 EXPOSE 7860

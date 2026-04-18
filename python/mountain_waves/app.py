@@ -397,6 +397,7 @@ def create_app() -> Dash:
                                 children=[
                                     html.Span("Rust + Python port of "),
                                     html.A("Bob Hart's original MATLAB model", href="https://moe.met.fsu.edu/~rhart/mtnwave.html", target="_blank"),
+                                    html.Span(" by Steve Nesbitt — CliMAS UIUC"),
                                     html.Span(f" · compute backend: {solver.backend_name()}"),
                                 ],
                             ),
