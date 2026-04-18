@@ -17,6 +17,26 @@ dependencies = [
     "scipy>=1.10",
     "dash>=2.16",
     "plotly>=5.20",
+    # HRRR profile fetcher (Profile tab "Initialize from HRRR").
+    # cfgrib needs the eccodes C library. Rather than requiring a system
+    # install (brew install eccodes / apt install libeccodes-dev) we pull
+    # it in from PyPI only. Current story (verified on PyPI, 2026-04):
+    #   - `cfgrib` depends on `eccodes` (Python CFFI bindings, pure-Python
+    #     wheel — no binary).
+    #   - `eccodes` depends on `findlibs`, which looks for `libeccodes` in
+    #     an installed Python package named `eccodeslib` first.
+    #   - `eccodeslib` is ECMWF's new official binary-wheel package
+    #     (macOS 13+ arm64/x86_64, manylinux_2_28 x86_64/aarch64, cp310..cp314).
+    #   - `ecmwflibs` is the older bundle; stale since 2024 and missing
+    #     cp312+. We keep it only as a Windows fallback since `eccodeslib`
+    #     has no Windows wheels.
+    # Result: `uv sync` / `pip install -e .` is enough on macOS and Linux.
+    "boto3>=1.28",
+    "xarray>=2023.1",
+    "cfgrib>=0.9.10",
+    "eccodes>=2.37",
+    "eccodeslib>=2.46 ; sys_platform != 'win32'",
+    "ecmwflibs>=0.6 ; sys_platform == 'win32'",
 ]
 
 [project.urls]

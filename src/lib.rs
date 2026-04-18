@@ -38,14 +38,18 @@ fn c(x: f64) -> Complex64 {
 // Two-layer analytic solver (port of tlwplot.m)
 // ---------------------------------------------------------------------------
 
-/// Compute the vertical-velocity field `w(x, z)` for flow over a
-/// witch-of-Agnesi mountain in a two-layer atmosphere.
+/// Compute vertical velocity `w(x, z)` and horizontal perturbation
+/// `u'(x, z)` for flow over a witch-of-Agnesi mountain in a two-layer
+/// atmosphere. `u'` is obtained per-wavenumber from
+/// `u'_k = −(i/k) · ∂ŵ_k/∂z`, which for this two-layer eigenbasis
+/// simplifies to `−h_s · U · ∂(above+below)/∂z` (the `1/k` and `k` cancel).
 ///
 /// Arrays returned:
 ///
 /// * `x` — shape `(npts + 1,)`, meters
 /// * `z` — shape `(npts + 1,)`, meters
 /// * `w` — shape `(nz, nx)` with rows along z, columns along x (m s⁻¹)
+/// * `u_prime` — same shape, m s⁻¹
 #[pyfunction]
 #[pyo3(signature = (l_upper, l_lower, u, h, a, ho, xdom, zdom, mink, maxk, npts=100))]
 #[allow(clippy::too_many_arguments)]
@@ -62,14 +66,20 @@ fn compute_two_layer<'py>(
     mink: f64,
     maxk: f64,
     npts: usize,
-) -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>, Bound<'py, PyArray2<f64>>)> {
-    let (x, z, w) = py.allow_threads(|| {
+) -> PyResult<(
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray2<f64>>,
+    Bound<'py, PyArray2<f64>>,
+)> {
+    let (x, z, w, uprime) = py.allow_threads(|| {
         two_layer(l_upper, l_lower, u, h, a, ho, xdom, zdom, mink, maxk, npts)
     });
     Ok((
         x.into_pyarray_bound(py),
         z.into_pyarray_bound(py),
         w.into_pyarray_bound(py),
+        uprime.into_pyarray_bound(py),
     ))
 }
 
@@ -85,7 +95,7 @@ fn two_layer(
     mink: f64,
     maxk: f64,
     npts: usize,
-) -> (Array1<f64>, Array1<f64>, Array2<f64>) {
+) -> (Array1<f64>, Array1<f64>, Array2<f64>, Array2<f64>) {
     let dk = 0.367 / a;
     let nk = (((maxk - mink) / dk).floor() as usize).max(1);
     let nslab = nk + 1;
@@ -100,11 +110,8 @@ fn two_layer(
     let x = Array1::from_iter((0..nx).map(|i| minx + dx * i as f64));
     let z = Array1::from_iter((0..nz).map(|j| dz * j as f64));
 
-    // Parallel across wavenumber samples. Each worker returns a contribution
-    // to the running trapezoidal sum stored as a flattened (nz * nx) complex
-    // vector, plus a partial ht weight. We accumulate the trapezoid pairwise
-    // afterward because trapezoidal summation needs adjacent samples.
-    let slabs: Vec<Vec<Complex64>> = (0..nslab)
+    // Each worker returns TWO complex slabs: one for ŵ, one for u'_complex.
+    let slabs: Vec<(Vec<Complex64>, Vec<Complex64>)> = (0..nslab)
         .into_par_iter()
         .map(|idx| {
             let kk = mink + dk * idx as f64;
@@ -127,22 +134,37 @@ fn two_layer(
 
             let hs = std::f64::consts::PI * a * ho * (-a * ksign).exp();
 
-            let mut slab = vec![Complex64::new(0.0, 0.0); nz * nx];
-            let prefactor = -I * c(kk) * c(hs * u);
+            let mut slab_w = vec![Complex64::new(0.0, 0.0); nz * nx];
+            let mut slab_u = vec![Complex64::new(0.0, 0.0); nz * nx];
+            let prefactor_w = -I * c(kk) * c(hs * u);
+            // u'_k contribution: (-i/k) · ∂ŵ_k/∂z — the −ik factor inside
+            // ŵ cancels with the 1/k in the continuity relation, giving
+            // −h_s·U·∂(above+below)/∂z with no k-dependent prefactor.
+            let prefactor_u = c(-hs * u);
 
             for (j, &zj) in z.iter().enumerate() {
-                let zfac = if zj <= h {
-                    c_coef * (I * c(zj) * m).exp() + d_coef * (-I * c(zj) * m).exp()
+                let (zfac, dzfac) = if zj <= h {
+                    let e_plus = (I * c(zj) * m).exp();
+                    let e_minus = (-I * c(zj) * m).exp();
+                    let below = c_coef * e_plus + d_coef * e_minus;
+                    let dbelow = I * m * (c_coef * e_plus - d_coef * e_minus);
+                    (below, dbelow)
                 } else {
-                    a_coef * (-c(zj) * n).exp()
+                    let e = (-c(zj) * n).exp();
+                    let above = a_coef * e;
+                    let dabove = -n * a_coef * e;
+                    (above, dabove)
                 };
-                let row_scale = prefactor * zfac;
+                let row_scale_w = prefactor_w * zfac;
+                let row_scale_u = prefactor_u * dzfac;
                 let row_start = j * nx;
                 for (i, &xi) in x.iter().enumerate() {
-                    slab[row_start + i] = row_scale * (-I * c(xi * kk)).exp();
+                    let xfac = (-I * c(xi * kk)).exp();
+                    slab_w[row_start + i] = row_scale_w * xfac;
+                    slab_u[row_start + i] = row_scale_u * xfac;
                 }
             }
-            slab
+            (slab_w, slab_u)
         })
         .collect();
 
@@ -153,24 +175,28 @@ fn two_layer(
         })
         .collect();
 
-    // Trapezoidal integration along the wavenumber axis.
+    // Trapezoidal integration along the wavenumber axis for both fields.
     let mut wc = vec![Complex64::new(0.0, 0.0); nz * nx];
+    let mut uc = vec![Complex64::new(0.0, 0.0); nz * nx];
     for kloop in 1..nslab {
         for i in 0..(nz * nx) {
-            wc[i] += c(0.5 * dk) * (slabs[kloop - 1][i] + slabs[kloop][i]);
+            wc[i] += c(0.5 * dk) * (slabs[kloop - 1].0[i] + slabs[kloop].0[i]);
+            uc[i] += c(0.5 * dk) * (slabs[kloop - 1].1[i] + slabs[kloop].1[i]);
         }
     }
     let ht: f64 = ht_samples[1..].iter().sum();
     let inv_ht = if ht.abs() > 0.0 { 1.0 / ht } else { 1.0 };
 
     let mut w = Array2::<f64>::zeros((nz, nx));
+    let mut u_prime = Array2::<f64>::zeros((nz, nx));
     for j in 0..nz {
         for i in 0..nx {
             w[[j, i]] = wc[j * nx + i].re * inv_ht;
+            u_prime[[j, i]] = uc[j * nx + i].re * inv_ht;
         }
     }
 
-    (x, z, w)
+    (x, z, w, u_prime)
 }
 
 // ---------------------------------------------------------------------------
@@ -204,17 +230,23 @@ fn compute_from_profile<'py>(
     mink: f64,
     maxk: f64,
     npts: usize,
-) -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>, Bound<'py, PyArray2<f64>>)> {
+) -> PyResult<(
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray2<f64>>,
+    Bound<'py, PyArray2<f64>>,
+)> {
     let zp = z_profile.as_array().to_owned();
     let up = u_profile.as_array().to_owned();
     let tp = theta_profile.as_array().to_owned();
-    let (x, z, w) = py.allow_threads(|| {
+    let (x, z, w, uprime) = py.allow_threads(|| {
         multi_layer(&zp, &up, &tp, a, ho, xdom, zdom, mink, maxk, npts)
     });
     Ok((
         x.into_pyarray_bound(py),
         z.into_pyarray_bound(py),
         w.into_pyarray_bound(py),
+        uprime.into_pyarray_bound(py),
     ))
 }
 
@@ -286,7 +318,7 @@ fn multi_layer(
     mink: f64,
     maxk: f64,
     npts: usize,
-) -> (Array1<f64>, Array1<f64>, Array2<f64>) {
+) -> (Array1<f64>, Array1<f64>, Array2<f64>, Array2<f64>) {
     let l2_profile = scorer_from_profile(z_profile, u_profile, theta_profile);
     let u_surface = u_profile[0];
 
@@ -334,13 +366,18 @@ fn multi_layer(
         })
         .collect();
 
-    let slabs: Vec<Vec<Complex64>> = (0..nslab)
+    // Each k sample produces slabs for BOTH ŵ and u'_complex. u'_k is
+    // computed from the analytic z-derivative of the layer eigenbasis:
+    //   ∂ŵ_j/∂z = σ_j · (−a_j e^{−σ Δz} + b_j e^{+σ Δz})
+    // multiplied by −i/k per the linearized continuity relation.
+    let slabs: Vec<(Vec<Complex64>, Vec<Complex64>)> = (0..nslab)
         .into_par_iter()
         .map(|idx| {
             let kk = mink + dk * idx as f64;
-            let mut slab = vec![Complex64::new(0.0, 0.0); nz * nx];
+            let mut slab_w = vec![Complex64::new(0.0, 0.0); nz * nx];
+            let mut slab_u = vec![Complex64::new(0.0, 0.0); nz * nx];
             if kk == 0.0 {
-                return slab;
+                return (slab_w, slab_u);
             }
             let ksign = kk.abs();
 
@@ -377,21 +414,26 @@ fn multi_layer(
                 bj[j] *= amp;
             }
 
-            // Assemble slab.
+            // Assemble slabs. u'_complex = (−i/k) · ∂ŵ/∂z per layer.
+            let inv_ik = -I / c(kk);
             let xfac: Vec<Complex64> =
                 x.iter().map(|&xi| (-I * c(xi * kk)).exp()).collect();
 
             for j in 0..nz {
                 let l = layer_of[j];
                 let dz_l = z[j] - layer_bot[l];
-                let zval = aj[l] * (-sigma[l] * dz_l).exp()
-                    + bj[l] * (sigma[l] * dz_l).exp();
+                let e_minus = (-sigma[l] * dz_l).exp();
+                let e_plus = (sigma[l] * dz_l).exp();
+                let zval_w = aj[l] * e_minus + bj[l] * e_plus;
+                let dwdz = sigma[l] * (-aj[l] * e_minus + bj[l] * e_plus);
+                let zval_u = inv_ik * dwdz;
                 let row_start = j * nx;
                 for i in 0..nx {
-                    slab[row_start + i] = zval * xfac[i];
+                    slab_w[row_start + i] = zval_w * xfac[i];
+                    slab_u[row_start + i] = zval_u * xfac[i];
                 }
             }
-            slab
+            (slab_w, slab_u)
         })
         .collect();
 
@@ -405,20 +447,24 @@ fn multi_layer(
     let inv_ht = if ht.abs() > 0.0 { 1.0 / ht } else { 1.0 };
 
     let mut wc = vec![Complex64::new(0.0, 0.0); nz * nx];
+    let mut uc = vec![Complex64::new(0.0, 0.0); nz * nx];
     for kloop in 1..nslab {
         for i in 0..(nz * nx) {
-            wc[i] += c(0.5 * dk) * (slabs[kloop - 1][i] + slabs[kloop][i]);
+            wc[i] += c(0.5 * dk) * (slabs[kloop - 1].0[i] + slabs[kloop].0[i]);
+            uc[i] += c(0.5 * dk) * (slabs[kloop - 1].1[i] + slabs[kloop].1[i]);
         }
     }
 
     let mut w = Array2::<f64>::zeros((nz, nx));
+    let mut u_prime = Array2::<f64>::zeros((nz, nx));
     for j in 0..nz {
         for i in 0..nx {
             w[[j, i]] = wc[j * nx + i].re * inv_ht;
+            u_prime[[j, i]] = uc[j * nx + i].re * inv_ht;
         }
     }
 
-    (x, z, w)
+    (x, z, w, u_prime)
 }
 
 // ---------------------------------------------------------------------------

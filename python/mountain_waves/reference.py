@@ -20,6 +20,8 @@ Rust version so they can be compared.
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 
 G = 9.80665
@@ -43,11 +45,18 @@ def compute_two_layer(
     maxk: float,
     npts: int = 100,
 ):
-    """Return ``(x, z, w)`` for flow over a witch-of-Agnesi mountain.
+    """Return ``(x, z, w, u_prime)`` for flow over a witch-of-Agnesi mountain.
 
     Arrays match the MATLAB conventions: ``x`` has shape ``(npts + 1,)``,
-    ``z`` has shape ``(npts + 1,)``, and ``w`` has shape
-    ``(z.size, x.size)`` indexed as ``w[z_index, x_index]``.
+    ``z`` has shape ``(npts + 1,)``, and both ``w`` and ``u_prime`` have
+    shape ``(z.size, x.size)`` indexed as ``[z_index, x_index]``.
+
+    ``u_prime`` is the wave-induced horizontal wind perturbation, obtained
+    from linearized continuity ``∂u'/∂x + ∂w/∂z = 0``. Per wavenumber,
+    ``u'_k = −(i/k) · ∂ŵ_k/∂z``; we analytically differentiate the two-layer
+    eigenfunctions (``A e^{−n z}`` above the interface, ``C e^{i m z} +
+    D e^{−i m z}`` below) and accumulate the same trapezoidal k-integration
+    used for ``w``.
     """
     dk = 0.367 / a
     nk = max(1, int((maxk - mink) // dk))
@@ -65,6 +74,8 @@ def compute_two_layer(
 
     matrix1 = np.zeros_like(X, dtype=complex)
     matrix3 = np.zeros_like(X, dtype=complex)
+    matrix1_u = np.zeros_like(X, dtype=complex)
+    matrix3_u = np.zeros_like(X, dtype=complex)
     ht = 0.0
 
     for kloop in range(nk + 1):
@@ -89,14 +100,28 @@ def compute_two_layer(
         below = (C * np.exp(1j * Z * m) + D * np.exp(-1j * Z * m)) * (Z <= h)
         matrix2 = (-1j * kk * hs * u * (above + below)) * np.exp(-1j * X * kk)
 
+        # Analytic z-derivative of the eigenfunctions (the two branches are
+        # continuous at z=h by construction, so the jump in the step factor
+        # contributes nothing to the derivative inside each region).
+        dabove = (-n) * A * np.exp(-Z * n) * (Z > h)
+        dbelow = (1j * m) * (C * np.exp(1j * Z * m) - D * np.exp(-1j * Z * m)) * (Z <= h)
+        # u'_k(x, z) = (-i/k) · ∂ŵ_k/∂z. Combining the −ik factor baked into
+        # matrix2's ŵ formula with the −i/k in front yields −hs·U·∂(above+
+        # below)/∂z. This removes the apparent 1/k singularity at k=0 — the
+        # result is analytic there — and avoids division edge cases.
+        matrix2_u = (-hs * u) * (dabove + dbelow) * np.exp(-1j * X * kk)
+
         if kloop > 0:
             matrix3 += 0.5 * (matrix1 + matrix2) * dk
+            matrix3_u += 0.5 * (matrix1_u + matrix2_u) * dk
         matrix1 = matrix2
+        matrix1_u = matrix2_u
 
     if ht == 0.0:
         ht = 1.0
     w = np.real(matrix3 / ht)
-    return x, z, w
+    u_prime = np.real(matrix3_u / ht)
+    return x, z, w, u_prime
 
 
 # ---------------------------------------------------------------------------
@@ -160,10 +185,17 @@ def compute_from_profile(
 ):
     """Arbitrary u(z)/theta(z) mountain-wave solver using transfer matrices.
 
-    The atmosphere is split into piecewise-constant L^2 layers centered on
-    the profile points. Inside each layer the wave-transform equation
-    reduces to an exponential ansatz; continuity of ŵ and ŵ' at interfaces
-    plus a radiation / decay condition aloft closes the system.
+    Returns ``(x, z, w, u_prime)``. The atmosphere is split into
+    piecewise-constant L² layers centered on the profile points. Inside
+    each layer the wave-transform equation reduces to an exponential
+    ansatz; continuity of ŵ and ŵ' at interfaces plus a radiation / decay
+    condition aloft closes the system.
+
+    The wave-induced horizontal wind perturbation ``u_prime`` is obtained
+    in the same Fourier loop: for each wavenumber ``k ≠ 0`` we take the
+    analytic z-derivative of the per-layer ŵ basis (``σ_j · (−a_j
+    e^{−σ_j Δz} + b_j e^{+σ_j Δz})``) and multiply by ``−i/k`` from the
+    linearized continuity relation ``u'_k = −(i/k) · ∂ŵ_k/∂z``.
     """
     zp = np.asarray(z_profile, dtype=float)
     up = np.asarray(u_profile, dtype=float)
@@ -201,6 +233,8 @@ def compute_from_profile(
 
     matrix1 = np.zeros((z.size, x.size), dtype=complex)
     matrix3 = np.zeros((z.size, x.size), dtype=complex)
+    matrix1_u = np.zeros((z.size, x.size), dtype=complex)
+    matrix3_u = np.zeros((z.size, x.size), dtype=complex)
     ht = 0.0
 
     for kloop in range(nslab):
@@ -211,7 +245,9 @@ def compute_from_profile(
             ht += np.pi * dk * a * np.exp(-a * ksign)
 
         if kk == 0.0:
+            # DC mode has no wave contribution; u' also vanishes here.
             matrix2 = np.zeros_like(matrix1)
+            matrix2_u = np.zeros_like(matrix1)
         else:
             # Principal-branch sigma: in each layer, the "a" coefficient
             # multiplies exp(-sigma*dz), which is always the outgoing /
@@ -245,24 +281,38 @@ def compute_from_profile(
             aj *= amp
             bj *= amp
 
-            # Build ŵ on the vertical grid.
+            # Build ŵ and ∂ŵ/∂z on the vertical grid. The per-layer basis
+            #   ŵ_j(z) = a_j e^{−σ_j Δz} + b_j e^{+σ_j Δz}
+            # differentiates cleanly to
+            #   ∂ŵ_j/∂z = σ_j · (−a_j e^{−σ_j Δz} + b_j e^{+σ_j Δz})
+            # and the continuity relation gives u'_k = −(i/k) · ∂ŵ/∂z.
             zfac = np.zeros(z.size, dtype=complex)
+            zfac_u = np.zeros(z.size, dtype=complex)
+            inv_ik = -1j / kk
             for j in range(z.size):
                 lj = layer_of[j]
                 dz_l = z[j] - layer_bot[lj]
-                zfac[j] = aj[lj] * np.exp(-sigma[lj] * dz_l) + bj[lj] * np.exp(sigma[lj] * dz_l)
+                e_minus = np.exp(-sigma[lj] * dz_l)
+                e_plus = np.exp(sigma[lj] * dz_l)
+                zfac[j] = aj[lj] * e_minus + bj[lj] * e_plus
+                dwdz = sigma[lj] * (-aj[lj] * e_minus + bj[lj] * e_plus)
+                zfac_u[j] = inv_ik * dwdz
 
             xfac = np.exp(-1j * x * kk)
             matrix2 = np.outer(zfac, xfac)
+            matrix2_u = np.outer(zfac_u, xfac)
 
         if kloop > 0:
             matrix3 += 0.5 * (matrix1 + matrix2) * dk
+            matrix3_u += 0.5 * (matrix1_u + matrix2_u) * dk
         matrix1 = matrix2
+        matrix1_u = matrix2_u
 
     if ht == 0.0:
         ht = 1.0
     w = np.real(matrix3 / ht)
-    return x, z, w
+    u_prime = np.real(matrix3_u / ht)
+    return x, z, w, u_prime
 
 
 # ---------------------------------------------------------------------------
@@ -270,8 +320,23 @@ def compute_from_profile(
 # ---------------------------------------------------------------------------
 
 
-def streamlines(x, z, u: float, w, num: int = 10):
-    """Return ``num`` streamlines as ``[(xs, ys), ...]`` polylines."""
+def streamlines(x, z, u, w, num: int = 10):
+    """Return ``num`` streamlines as ``[(xs, ys), ...]`` polylines.
+
+    ``u`` may be a scalar (uniform mean flow, used for the two-layer solver)
+    or a 1-D array of length ``nz`` giving the mean wind at each render-grid
+    height. In linear wave theory the parcel displacement at height ``z₀`` is
+    ``η(x, z₀) = (1/U(z₀)) · ∫ w(x', z₀) dx'``, so the time step used to
+    integrate along each streamline depends on the wind at that streamline's
+    height — not on the surface wind. Using a single scalar ``U_surface`` for
+    every streamline (as Hart's MATLAB ``stream.m`` did because the two-layer
+    case assumed uniform ``U``) over-amplifies upper streamlines whenever the
+    real profile has shear.
+
+    We guard against near-zero ``U(z₀)`` (which would blow up the tracer) with
+    a 0.1 m/s floor — a parcel literally at rest cannot trace a linear
+    streamline in this framework, so we just freeze it there.
+    """
     x = np.asarray(x)
     z = np.asarray(z)
     w = np.asarray(w)
@@ -281,7 +346,17 @@ def streamlines(x, z, u: float, w, num: int = 10):
         return []
     minx = float(x[0])
     dx = float(x[1] - x[0])
-    tstep = dx / u
+
+    u_arr = np.atleast_1d(np.asarray(u, dtype=float))
+    if u_arr.size == 1:
+        u_by_row = np.full(nz, float(u_arr[0]))
+    elif u_arr.size == nz:
+        u_by_row = u_arr
+    else:
+        # Caller gave an array of the wrong length — fall back to the mean so
+        # the plot still renders rather than raising mid-draw.
+        u_by_row = np.full(nz, float(np.mean(u_arr)))
+
     dh = nz / num
 
     lines = []
@@ -293,6 +368,10 @@ def streamlines(x, z, u: float, w, num: int = 10):
             ycell = nz
         yci = int(round(ycell) - 1)
         yci = max(0, min(nz - 1, yci))
+        u_local = float(u_by_row[yci])
+        # 0.1 m/s floor prevents 1/u blowups at stagnant layers.
+        u_local = u_local if abs(u_local) > 0.1 else math.copysign(0.1, u_local) if u_local != 0 else 0.1
+        tstep = dx / u_local
         xs = np.empty(nx)
         ys = np.empty(nx)
         xs[0] = minx
