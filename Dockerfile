@@ -74,6 +74,9 @@ ENV HOME=/tmp \
 # wheel's copy with a _core-less source tree, and `from . import _core` would
 # fail with "partially initialized module" (HF deploy 2026-04-18).
 COPY run.py ./run.py
+# README.md is rendered inside the app's "Theory & About" modal at runtime.
+# Without this copy the modal falls back to a short placeholder.
+COPY README.md ./README.md
 
 EXPOSE 7860
 CMD ["python", "run.py", "--host", "0.0.0.0", "--port", "7860"]

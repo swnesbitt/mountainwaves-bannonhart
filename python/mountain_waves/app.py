@@ -24,11 +24,12 @@ from __future__ import annotations
 
 import math
 import os
+from pathlib import Path
 from typing import Tuple
 
 import numpy as np
 import plotly.graph_objects as go
-from dash import Dash, Input, Output, State, dcc, html, no_update
+from dash import Dash, Input, Output, State, ctx, dcc, html, no_update
 
 from . import solver
 from .profile import (
@@ -41,6 +42,54 @@ from .profile import (
 
 
 OMEGA = 7.292e-5
+
+
+# ---------------------------------------------------------------------------
+# README loader (for the Theory & About modal)
+# ---------------------------------------------------------------------------
+#
+# The "Theory & About" link in the header opens a modal that renders the
+# project README.md as markdown. The README lives at the project root in the
+# dev layout, but in the Docker runtime the installed package is in
+# site-packages while README.md is at /app/README.md (copied there by the
+# Dockerfile). We probe both and fall back to a short placeholder.
+
+def _load_readme_markdown() -> str:
+    """Return README.md with the HF YAML frontmatter stripped.
+
+    Candidates are tried in order of specificity: next to the project root
+    (dev), next to the launcher at /app (Docker), and finally cwd. The HF
+    Spaces metadata block at the top (between leading ``---`` markers) is
+    not useful to end users and is stripped before returning.
+    """
+    here = Path(__file__).resolve()
+    candidates = [
+        here.parents[2] / "README.md",   # <repo>/python/mountain_waves/app.py → <repo>/README.md
+        Path("/app/README.md"),          # Docker runtime
+        Path.cwd() / "README.md",        # last-ditch
+    ]
+    for p in candidates:
+        try:
+            if p.is_file():
+                text = p.read_text(encoding="utf-8")
+                break
+        except OSError:
+            continue
+    else:
+        return (
+            "# Mountain Waves\n\n"
+            "*README.md could not be located at runtime — see "
+            "[the project page](https://huggingface.co/spaces/snesbitt/mountain-waves).*"
+        )
+    # Strip leading YAML frontmatter (HF Spaces metadata).
+    if text.startswith("---\n"):
+        close = text.find("\n---\n", 4)
+        if close != -1:
+            text = text[close + 5:]
+    return text
+
+
+_README_MD = _load_readme_markdown()
 LATIT_RAD_DEFAULT = math.radians(45.0)
 
 
@@ -391,14 +440,30 @@ def create_app() -> Dash:
                     html.Div(
                         className="mw-header-text",
                         children=[
-                            html.H1("Interactive 2-D Mountain-Wave Visualizer"),
+                            html.H1("Interactive 2-D Linear Mountain Wave Visualizer"),
                             html.Div(
                                 className="mw-subtitle",
                                 children=[
                                     html.Span("Rust + Python port of "),
                                     html.A("Bob Hart's original MATLAB model", href="https://moe.met.fsu.edu/~rhart/mtnwave.html", target="_blank"),
-                                    html.Span(" by Steve Nesbitt — CliMAS UIUC"),
+                                    html.Span(" by "),
+                                    html.A("Steve Nesbitt", href="https://publish.illinois.edu/swnesbitt/", target="_blank"),
+                                    html.Span(" — CliMAS UIUC"),
                                     html.Span(f" · compute backend: {solver.backend_name()}"),
+                                ],
+                            ),
+                            # "Theory & About" link sits on its own line directly
+                            # under the subtitle. Clicking it toggles the modal
+                            # defined at the bottom of the layout.
+                            html.Div(
+                                className="mw-readme-link-row",
+                                children=[
+                                    html.Button(
+                                        "📖 Theory & About",
+                                        id="show-readme",
+                                        n_clicks=0,
+                                        className="mw-readme-link",
+                                    ),
                                 ],
                             ),
                         ],
@@ -495,6 +560,39 @@ def create_app() -> Dash:
                     html.Span("Click 'Analyze flow' to update the fields."),
                 ],
             ),
+            # Theory & About modal — hidden by default, shown when the user
+            # clicks the "📖 Theory & About" link in the header. The outer
+            # div is the dark backdrop (click-to-dismiss); the inner div is
+            # the card that actually contains the rendered README.
+            html.Div(
+                id="readme-modal",
+                className="mw-modal",
+                style={"display": "none"},
+                n_clicks=0,
+                children=[
+                    html.Div(
+                        id="readme-modal-card",
+                        className="mw-modal-card",
+                        # Swallow clicks inside the card so clicking text
+                        # doesn't close the modal. Only the backdrop does.
+                        n_clicks=0,
+                        children=[
+                            html.Button(
+                                "×",
+                                id="close-readme",
+                                n_clicks=0,
+                                className="mw-modal-close",
+                                title="Close (Esc)",
+                            ),
+                            dcc.Markdown(
+                                _README_MD,
+                                className="mw-readme-content",
+                                link_target="_blank",
+                            ),
+                        ],
+                    ),
+                ],
+            ),
         ],
     )
 
@@ -512,6 +610,22 @@ body { background: #0b0e14; color: #dfe3ea; font-family: -apple-system, system-u
 .mw-header h1 { margin: 0 0 4px 0; font-size: 24px; }
 .mw-subtitle { color: #9aa3ad; font-size: 13px; }
 .mw-subtitle a { color: #57b3ff; }
+.mw-readme-link-row { margin-top: 6px; }
+.mw-readme-link { background: #1e2835; border: 1px solid #2d3a4b; color: #9cd2ff; padding: 3px 12px; border-radius: 4px; font-size: 12px; cursor: pointer; font-family: inherit; }
+.mw-readme-link:hover { background: #2a3a4e; color: #c7e4ff; border-color: #3b86e6; }
+.mw-modal { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.72); display: flex; align-items: flex-start; justify-content: center; z-index: 9999; padding: 40px 20px; overflow-y: auto; }
+.mw-modal-card { position: relative; background: #0f141c; border: 1px solid #2d3a4b; border-radius: 8px; max-width: 860px; width: 100%; padding: 24px 36px 28px 36px; color: #dfe3ea; box-shadow: 0 16px 40px rgba(0,0,0,0.6); }
+.mw-modal-close { position: absolute; top: 8px; right: 12px; background: transparent; border: none; color: #9aa3ad; font-size: 26px; line-height: 1; cursor: pointer; padding: 4px 10px; font-family: inherit; }
+.mw-modal-close:hover { color: #ffffff; }
+.mw-readme-content h1 { font-size: 24px; color: #6ecbff; margin-top: 0; border-bottom: 1px solid #2d3a4b; padding-bottom: 8px; }
+.mw-readme-content h2 { font-size: 18px; color: #6ecbff; margin-top: 22px; }
+.mw-readme-content h3 { font-size: 15px; color: #9cd2ff; margin-top: 18px; }
+.mw-readme-content p, .mw-readme-content li { color: #cbd3dc; font-size: 13px; line-height: 1.55; }
+.mw-readme-content a { color: #57b3ff; }
+.mw-readme-content code { background: #131a24; padding: 1px 5px; border-radius: 3px; color: #ffd685; font-family: Monaco, Menlo, "Courier New", monospace; font-size: 12px; }
+.mw-readme-content pre { background: #131a24; padding: 10px 14px; border-radius: 4px; overflow-x: auto; border: 1px solid #1f2632; }
+.mw-readme-content pre code { background: transparent; padding: 0; color: #dfe3ea; }
+.mw-readme-content blockquote { border-left: 3px solid #3b86e6; margin: 12px 0; padding: 2px 14px; color: #c7ced6; background: #131a24; }
 .mw-controls { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px 28px; background: #11161f; padding: 18px; border-radius: 8px; margin: 14px 0; }
 .mw-controls.profile { grid-template-columns: 1fr 1fr 1fr; }
 .slider-row { display: flex; flex-direction: column; gap: 4px; }
@@ -1077,6 +1191,47 @@ def _register_callbacks(app: Dash):
         "function(v) { return Math.round(v) + '\u00b0 N'; }",
         Output("latit-val", "children"),
         Input("latit", "value"),
+    )
+
+    # --- Theory & About modal ----------------------------------------------
+    # The show button opens the modal, the × button closes it. Returning an
+    # empty style dict lets the .mw-modal CSS class (display: flex) take
+    # effect; returning {"display": "none"} hides it.
+    @app.callback(
+        Output("readme-modal", "style"),
+        [
+            Input("show-readme", "n_clicks"),
+            Input("close-readme", "n_clicks"),
+        ],
+        prevent_initial_call=True,
+    )
+    def _toggle_readme(_show, _close):
+        if ctx.triggered_id == "show-readme":
+            return {}
+        return {"display": "none"}
+
+    # Close the modal on Esc keypress as well. Clientside so it doesn't
+    # require a round-trip; the keydown listener is attached once on load
+    # and clicks the × button synthetically when Esc is pressed while the
+    # modal is visible.
+    app.clientside_callback(
+        """
+        function() {
+            if (window.__mw_readme_esc_attached) return window.dash_clientside.no_update;
+            window.__mw_readme_esc_attached = true;
+            document.addEventListener('keydown', function(e) {
+                if (e.key !== 'Escape') return;
+                var modal = document.getElementById('readme-modal');
+                if (!modal) return;
+                if (modal.style.display === 'none') return;
+                var btn = document.getElementById('close-readme');
+                if (btn) btn.click();
+            });
+            return window.dash_clientside.no_update;
+        }
+        """,
+        Output("close-readme", "title"),
+        Input("close-readme", "id"),
     )
 
     # --- HRRR flow-from slider readout -----------------------------------
