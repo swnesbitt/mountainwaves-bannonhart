@@ -24,3 +24,10 @@ python/mountain_waves/_core*.dylib
 .DS_Store
 bluesky_post.md
 linkedin_post.md
+target/
+*.so
+*.dylib
+*.rlib
+*.rmeta
+__pycache__/
+*.pyc
