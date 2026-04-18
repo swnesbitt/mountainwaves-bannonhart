@@ -14,9 +14,23 @@ try:  # pragma: no cover - import-time branching
     from . import _core as _rust  # type: ignore
 
     _BACKEND = "rust"
-except ImportError:
+    _RUST_IMPORT_ERROR: str | None = None
+except ImportError as _exc:
     _rust = None  # type: ignore
     _BACKEND = "python"
+    # Keep the real exception message around so the launcher can log it.
+    # ImportError on a Rust extension almost always means either the wheel
+    # never installed into site-packages, or it installed but a runtime
+    # dep (libc/libgomp/libpython ABI) can't be resolved. Silently falling
+    # back to the Python reference on a production deploy hides real bugs.
+    _RUST_IMPORT_ERROR = f"{type(_exc).__name__}: {_exc}"
+    import sys as _sys
+    print(
+        f"[mountain-waves] Rust _core import failed, using Python fallback: "
+        f"{_RUST_IMPORT_ERROR}",
+        file=_sys.stderr,
+        flush=True,
+    )
 
 from . import reference as _ref
 
