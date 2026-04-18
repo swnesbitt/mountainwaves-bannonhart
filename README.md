@@ -7,7 +7,7 @@ sdk: docker
 app_port: 7860
 pinned: false
 license: mit
-short_description: Interactive 2-D mountain-wave model (Rust + Dash, after Hart 1995)
+short_description: Interactive 2-D mountain-wave visualizer (Rust + Dash)
 ---
 
 # Mountain Waves
