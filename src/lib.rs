@@ -250,6 +250,24 @@ fn compute_from_profile<'py>(
     ))
 }
 
+// Minimum |U| used in the Scorer-parameter denominator. At a critical
+// level (U = 0) linear Scorer/Taylor-Goldstein is singular — we clamp
+// |U| to U_FLOOR_SCORER (sign-preserving) so students can set up
+// wind-reversal profiles and still see the solver output away from the
+// critical level. The Python UI surfaces "⚠️ critical level at z=..."
+// from the companion `critical_levels` helper in reference.py so nothing
+// is silently smoothed over. Keep in sync with `U_FLOOR_SCORER` in
+// python/mountain_waves/reference.py.
+const U_FLOOR_SCORER: f64 = 0.5;
+
+fn u_clamped_for_scorer(uu: f64) -> f64 {
+    if uu >= 0.0 {
+        uu.max(U_FLOOR_SCORER)
+    } else {
+        uu.min(-U_FLOOR_SCORER)
+    }
+}
+
 fn scorer_from_profile(z: &Array1<f64>, u: &Array1<f64>, theta: &Array1<f64>) -> Array1<f64> {
     const G: f64 = 9.80665;
     let n = z.len();
@@ -285,12 +303,8 @@ fn scorer_from_profile(z: &Array1<f64>, u: &Array1<f64>, theta: &Array1<f64>) ->
             (dth, d2u)
         };
         let n2 = (G / theta[i]) * dthdz;
-        let uu = u[i];
-        l2[i] = if uu.abs() > 1e-6 {
-            n2 / (uu * uu) - d2udz2 / uu
-        } else {
-            0.0
-        };
+        let uu = u_clamped_for_scorer(u[i]);
+        l2[i] = n2 / (uu * uu) - d2udz2 / uu;
     }
     l2
 }

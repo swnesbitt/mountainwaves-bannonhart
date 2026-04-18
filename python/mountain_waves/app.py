@@ -97,6 +97,25 @@ LATIT_RAD_DEFAULT = math.radians(45.0)
 # Preset scenarios
 # ---------------------------------------------------------------------------
 
+# Default two-layer slider values shown when the page first loads. Also
+# what the "Reset to defaults" button in the Actions column restores.
+# These match the initial slider-default arguments in ``_two_layer_controls``
+# and coincide with the "trapped" preset — Hart's Example 2 — which is the
+# most instructive starting point.
+TWO_LAYER_DEFAULTS = {
+    "U": 20.0,
+    "L_upper": 4.0,
+    "L_lower": 10.0,
+    "H": 3.5,
+    "mtn_h": 0.5,
+    "mtn_a": 2.5,
+    "xdom": 40.0,
+    "zdom": 10.0,
+    "mink_k": 0,
+    "maxk_k": 30,
+}
+
+
 PRESETS = {
     "uniform": {
         "label": "Uniform atmosphere (Example 1)",
@@ -139,6 +158,30 @@ PRESETS = {
         "L_lower": 10.0,
         "H": 2.5,
         "mtn_h": 0.8,
+        "mtn_a": 2.5,
+        "xdom": 40.0,
+        "zdom": 10.0,
+        "mink_k": 0,
+        "maxk_k": 30,
+    },
+    "critical_caricature": {
+        # Two-layer caricature of a critical-layer absorber. A real critical
+        # level requires U(z)=0 somewhere — impossible in two-layer mode —
+        # so this preset instead stacks a strongly evanescent upper layer
+        # (L_upper very small) on top of a moderate-Scorer lower layer, with
+        # the interface at 2 km. For a mountain with a=2500 m the dominant
+        # forcing wavenumbers are k ~ 4e-4, which satisfies l_upper^2 < k^2
+        # (evanescent aloft) and l_lower^2 > k^2 (propagating below).
+        # Most upgoing wave energy is reflected at the interface, so the
+        # field above 2 km decays rapidly — a linear-theory analog of
+        # Booker & Bretherton (1967) critical-level absorption. See the
+        # Profile tab for a physically faithful U(z)=0 setup.
+        "label": "Near critical-layer caricature (strong absorption at 2 km)",
+        "U": 20.0,
+        "L_upper": 1.0,
+        "L_lower": 10.0,
+        "H": 2.0,
+        "mtn_h": 0.5,
         "mtn_a": 2.5,
         "xdom": 40.0,
         "zdom": 10.0,
@@ -518,6 +561,7 @@ def create_app() -> Dash:
                     html.Div(id="scorer-readout", className="diag-card"),
                     html.Div(id="rossby-readout", className="diag-card"),
                     html.Div(id="nonlin-readout", className="diag-card"),
+                    html.Div(id="critical-readout", className="diag-card"),
                 ],
             ),
             # Top row: w and u' heatmaps side-by-side. Streamline view lives
@@ -628,6 +672,8 @@ body { background: #0b0e14; color: #dfe3ea; font-family: -apple-system, system-u
 .mw-readme-content blockquote { border-left: 3px solid #3b86e6; margin: 12px 0; padding: 2px 14px; color: #c7ced6; background: #131a24; }
 .mw-controls { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px 28px; background: #11161f; padding: 18px; border-radius: 8px; margin: 14px 0; }
 .mw-controls.profile { grid-template-columns: 1fr 1fr 1fr; }
+/* Two-layer tab mirrors the profile tab's 3-column grid: sliders | sliders | Actions. */
+.mw-controls.two-layer { grid-template-columns: 1fr 1fr 1fr; }
 .slider-row { display: flex; flex-direction: column; gap: 4px; }
 .slider-header { display: flex; justify-content: space-between; font-size: 13px; }
 .slider-label { color: #c7ced6; }
@@ -702,48 +748,99 @@ body { background: #0b0e14; color: #dfe3ea; font-family: -apple-system, system-u
 
 
 def _two_layer_controls():
+    d = TWO_LAYER_DEFAULTS
     return html.Div(
-        className="mw-controls",
+        # Three-column grid to mirror the profile tab: atmospheric sliders |
+        # terrain+domain+spectrum sliders | Actions column. The Actions
+        # column holds Reset/Analyze plus the preset buttons so the user's
+        # eye finds every "do something" control in the same place on both
+        # tabs.
+        className="mw-controls two-layer",
         children=[
             html.Div(
                 className="section",
                 children=[
                     html.Div("Atmospheric profile", className="section-title"),
-                    _slider("U", "Surface wind (m/s)", 0, 100, 1, 20),
-                    _slider("L_upper", "L upper (×10⁻⁴)", 0, 50, 0.1, 4.0),
-                    _slider("L_lower", "L lower (×10⁻⁴)", 0, 50, 0.1, 10.0),
-                    _slider("H", "Interface ht. (km)", 0, 20, 0.1, 3.5),
+                    _slider("U", "Surface wind (m/s)", 0, 100, 1, d["U"]),
+                    _slider("L_upper", "L upper (×10⁻⁴)", 0, 50, 0.1, d["L_upper"]),
+                    _slider("L_lower", "L lower (×10⁻⁴)", 0, 50, 0.1, d["L_lower"]),
+                    _slider("H", "Interface ht. (km)", 0, 20, 0.1, d["H"]),
                 ],
             ),
             html.Div(
                 className="section",
                 children=[
                     html.Div("Terrain profile", className="section-title"),
-                    _slider("mtn_h", "Max height (km)", 0, 3, 0.05, 0.5),
-                    _slider("mtn_a", "Half-width (km)", 0.25, 25, 0.25, 2.5),
+                    _slider("mtn_h", "Max height (km)", 0, 3, 0.05, d["mtn_h"]),
+                    _slider("mtn_a", "Half-width (km)", 0.25, 25, 0.25, d["mtn_a"]),
                     html.Div("Domain profile", className="section-title", style={"marginTop": "12px"}),
-                    _slider("xdom", "Horizontal (km)", 5, 100, 1, 40),
-                    _slider("zdom", "Vertical (km)", 1, 20, 0.5, 10),
+                    _slider("xdom", "Horizontal (km)", 5, 100, 1, d["xdom"]),
+                    _slider("zdom", "Vertical (km)", 1, 20, 0.5, d["zdom"]),
                     html.Div("Spectral profile", className="section-title", style={"marginTop": "12px"}),
-                    _slider("mink_k", "Min wave# (half-widths)", 0, 50, 0.5, 0),
-                    _slider("maxk_k", "Max wave# (half-widths)", 0, 50, 0.5, 30),
+                    _slider("mink_k", "Min wave# (half-widths)", 0, 50, 0.5, d["mink_k"]),
+                    _slider("maxk_k", "Max wave# (half-widths)", 0, 50, 0.5, d["maxk_k"]),
+                ],
+            ),
+            # Actions column — Reset / Analyze at the top, presets below.
+            # Shares the .mw-actions-section layout with the profile tab so
+            # both tabs look and feel the same.
+            html.Div(
+                className="section mw-actions-section",
+                children=[
+                    html.Div("Actions", className="section-title"),
+                    html.Button(
+                        "Reset to defaults",
+                        id="reset-two",
+                        className="mw-action-btn",
+                        title="Restore every slider on this tab to its initial value.",
+                    ),
+                    html.Button(
+                        "Analyze flow",
+                        id="analyze-two",
+                        className="mw-analyze mw-action-btn",
+                    ),
                     html.Div(
-                        className="mw-presets",
-                        children=[
-                            html.Button("Uniform", id="preset-uniform"),
-                            html.Button("Trapped waves", id="preset-trapped"),
-                            html.Button(
-                                "Near-downslope",
-                                id="preset-downslope",
-                                title=(
-                                    "Strong lee waves approaching the downslope-windstorm "
-                                    "regime. Not from Hart's examples — linear Fourier/Scorer "
-                                    "theory cannot fully simulate real downslope windstorms "
-                                    "because they are fundamentally nonlinear."
-                                ),
-                            ),
-                            html.Button("Analyze flow", id="analyze-two", className="mw-analyze"),
-                        ],
+                        "Presets",
+                        className="section-title",
+                        style={"marginTop": "10px"},
+                    ),
+                    html.Button(
+                        "Uniform atmosphere",
+                        id="preset-uniform",
+                        className="mw-action-btn",
+                        title="Hart's Example 1 — constant Scorer parameter, no trapping.",
+                    ),
+                    html.Button(
+                        "Trapped lee waves",
+                        id="preset-trapped",
+                        className="mw-action-btn",
+                        title="Hart's Example 2 — strong lower-layer Scorer, trapped wave train downstream.",
+                    ),
+                    html.Button(
+                        "Near-downslope",
+                        id="preset-downslope",
+                        className="mw-action-btn",
+                        title=(
+                            "Strong lee waves approaching the downslope-windstorm "
+                            "regime. Not from Hart's examples — linear Fourier/Scorer "
+                            "theory cannot fully simulate real downslope windstorms "
+                            "because they are fundamentally nonlinear."
+                        ),
+                    ),
+                    html.Button(
+                        "Near critical layer at 2 km",
+                        id="preset-critical-2km",
+                        className="mw-action-btn",
+                        title=(
+                            "Two-layer caricature of critical-level absorption. "
+                            "Strong Scorer contrast across an interface at 2 km "
+                            "(l_lower² >> k² >> l_upper²) reflects most wave "
+                            "energy downward, mimicking Booker & Bretherton "
+                            "(1967) absorption. A true critical level requires "
+                            "U(z)=0, which two-layer mode cannot represent — "
+                            "use the Profile tab for the physically faithful "
+                            "wind-reversal setup."
+                        ),
                     ),
                 ],
             ),
@@ -1288,7 +1385,10 @@ def _register_callbacks(app: Dash):
             return {}, {"display": "none"}
         return {"display": "none"}, {}
 
-    # --- presets apply to sliders ----------------------------------------
+    # --- presets and reset apply to sliders ------------------------------
+    # Both the three preset buttons and the "Reset to defaults" button in
+    # the Actions column funnel through this callback. Reset is just
+    # another preset whose values happen to be TWO_LAYER_DEFAULTS.
     @app.callback(
         [
             Output("U", "value"),
@@ -1306,18 +1406,32 @@ def _register_callbacks(app: Dash):
             Input("preset-uniform", "n_clicks"),
             Input("preset-trapped", "n_clicks"),
             Input("preset-downslope", "n_clicks"),
+            Input("preset-critical-2km", "n_clicks"),
+            Input("reset-two", "n_clicks"),
         ],
         prevent_initial_call=True,
     )
-    def _apply_preset(nu, nt, nd):
+    def _apply_preset(nu, nt, nd, nc, nr):
         from dash import ctx
 
         trig = ctx.triggered_id
-        key = {"preset-uniform": "uniform", "preset-trapped": "trapped", "preset-downslope": "downslope"}.get(trig)
-        if key is None:
-            return [no_update] * 10
-        p = PRESETS[key]
-        return [p["U"], p["L_upper"], p["L_lower"], p["H"], p["mtn_h"], p["mtn_a"], p["xdom"], p["zdom"], p["mink_k"], p["maxk_k"]]
+        if trig == "reset-two":
+            p = TWO_LAYER_DEFAULTS
+        else:
+            key = {
+                "preset-uniform": "uniform",
+                "preset-trapped": "trapped",
+                "preset-downslope": "downslope",
+                "preset-critical-2km": "critical_caricature",
+            }.get(trig)
+            if key is None:
+                return [no_update] * 10
+            p = PRESETS[key]
+        return [
+            p["U"], p["L_upper"], p["L_lower"], p["H"],
+            p["mtn_h"], p["mtn_a"], p["xdom"], p["zdom"],
+            p["mink_k"], p["maxk_k"],
+        ]
 
     # --- two-layer analyze ------------------------------------------------
     @app.callback(
@@ -1328,6 +1442,7 @@ def _register_callbacks(app: Dash):
             Output("scorer-readout", "children"),
             Output("rossby-readout", "children"),
             Output("nonlin-readout", "children"),
+            Output("critical-readout", "children"),
         ],
         [
             Input("analyze-two", "n_clicks"),
@@ -1475,7 +1590,48 @@ def _register_callbacks(app: Dash):
                 html.Span(f"({flag})", className="note"),
             ]
         )
-        return sfig, wfig, upfig, scorer_badge, rossby_badge, nonlin_badge
+        # Critical-level detection — profile mode only. The two-layer mode
+        # carries a single scalar U, so a "wind reversal" isn't even
+        # representable there, and the badge just states that.
+        if mode == "profile":
+            from .reference import critical_levels as _critical_levels
+            us_p = np.asarray(store["u"])
+            zs_p = np.asarray(store["z"])
+            crits = _critical_levels(zs_p, us_p)
+            if crits:
+                heights_km = ", ".join(f"{h/1000.0:.2f}" for h in crits)
+                critical_badge = html.Span(
+                    [
+                        html.B("⚠️ Critical level(s)"),
+                        html.Span(f"z = {heights_km} km", className="v"),
+                        html.Span(
+                            "(U = 0 → linear theory breaks down; results near "
+                            "these heights are not physical)",
+                            className="note",
+                        ),
+                    ]
+                )
+            else:
+                critical_badge = html.Span(
+                    [
+                        html.B("Critical levels"),
+                        html.Span("none", className="v"),
+                        html.Span("(U does not cross zero)", className="note"),
+                    ]
+                )
+        else:
+            critical_badge = html.Span(
+                [
+                    html.B("Critical levels"),
+                    html.Span("n/a", className="v"),
+                    html.Span(
+                        "(two-layer mode uses a single U; switch to Profile "
+                        "mode to prescribe wind reversals)",
+                        className="note",
+                    ),
+                ]
+            )
+        return sfig, wfig, upfig, scorer_badge, rossby_badge, nonlin_badge, critical_badge
 
     # --- profile editing ---------------------------------------------------
     # Drag-on-graph → update store. Each profile point is a Plotly "shape",
@@ -1667,7 +1823,7 @@ def _register_callbacks(app: Dash):
             )
 
         try:
-            from .hrrr import along_flow_positive, fetch_profile
+            from .hrrr import along_flow_signed, fetch_profile
         except ImportError as exc:
             return (
                 no_update,
@@ -1701,7 +1857,11 @@ def _register_callbacks(app: Dash):
         u_arr = np.asarray(u_raw, dtype=float)
         v_arr = np.asarray(v_raw, dtype=float)
         th_arr = np.asarray(theta, dtype=float)
-        u_along = along_flow_positive(u_arr, v_arr, flow_f)
+        # Signed projection — wind reversals (e.g. an easterly jet when the
+        # user specified flow_from_deg corresponding to westerly) produce
+        # negative values, which the solver handles via the Scorer critical-
+        # level clamp and the "⚠️ Critical level" diagnostic badge.
+        u_along = along_flow_signed(u_arr, v_arr, flow_f)
 
         # Push current state onto history so the fetch is undoable.
         history = list(history or [])
@@ -1770,13 +1930,14 @@ def _register_callbacks(app: Dash):
             return no_update, no_update, no_update
 
         try:
-            from .hrrr import along_flow_positive
+            from .hrrr import along_flow_signed
         except ImportError:
             return no_update, no_update, no_update
 
         u_raw = np.asarray(raw["u"], dtype=float)
         v_raw = np.asarray(raw["v"], dtype=float)
-        u_along = along_flow_positive(u_raw, v_raw, flow_f)
+        # Signed projection — keep wind reversals instead of clipping to 0.
+        u_along = along_flow_signed(u_raw, v_raw, flow_f)
 
         new_store = {
             "z": list(raw["z"]),

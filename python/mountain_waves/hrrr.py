@@ -143,31 +143,41 @@ def _nearest_ij(lats: np.ndarray, lons: np.ndarray, lat0: float, lon0: float) ->
     return int(j), int(i)
 
 
-def along_flow_positive(
+def along_flow_signed(
     u: np.ndarray, v: np.ndarray, flow_from_deg: float
 ) -> np.ndarray:
-    """Along-flow wind component, clamped to ≥ 0, for the mountain-wave solver.
+    """Signed along-flow wind component for the mountain-wave solver.
 
     ``flow_from_deg`` follows the standard meteorological convention — the
     azimuth the wind is blowing *from* (270° = westerly, 160° = from the SSE).
-    The returned scalar is the component of the wind parallel to that
-    "from" direction. It's positive when the actual wind is blowing from
-    (or within 90° of) ``flow_from_deg`` and zero otherwise; a reversal
-    would give a negative dot product which we clip to zero because the
-    mountain-wave solver expects a positive cross-mountain speed.
+    The returned scalar is the signed component of the wind parallel to
+    that "from" direction: **positive** when the wind is blowing *from* a
+    direction within 90° of ``flow_from_deg``, and **negative** when the
+    wind reverses relative to that reference direction. Callers that
+    depended on the old zero-clipped behavior should take
+    ``np.maximum(along_flow_signed(...), 0.0)`` explicitly; the solver
+    itself now tolerates negative U via the Scorer-parameter critical-level
+    clamp, so wind reversals aloft should pass through unmodified and be
+    surfaced to the user as actual reversals.
 
     Derivation: a wind with components ``(u, v)`` (east- and north-positive)
     blowing *from* azimuth ``φ_act`` has magnitude ``s`` and
     ``(u, v) = -s · (sin φ_act, cos φ_act)``. Projecting onto the unit
     vector pointing in the direction the flow is going when it comes from
     ``φ_spec`` (i.e. ``φ_spec + 180``) gives ``s · cos(φ_act − φ_spec)``.
-    That evaluates to ``-(u sin φ_spec + v cos φ_spec)``, which is positive
-    when actual and specified "from" directions are parallel and negative
-    when they're antiparallel. We then take ``max(·, 0)``.
+    That evaluates to ``-(u sin φ_spec + v cos φ_spec)``, positive when
+    actual and specified "from" directions are parallel and negative when
+    antiparallel. No clamping is applied.
     """
     rad = np.deg2rad(flow_from_deg)
-    signed = -(np.asarray(u) * np.sin(rad) + np.asarray(v) * np.cos(rad))
-    return np.maximum(signed, 0.0)
+    return -(np.asarray(u) * np.sin(rad) + np.asarray(v) * np.cos(rad))
+
+
+# Backward-compatibility alias — the old name is retained so external
+# imports keep working, but it now returns the *signed* along-flow
+# component (no zero-clip). Callers that genuinely need the clipped
+# variant must apply ``np.maximum(_, 0.0)`` themselves.
+along_flow_positive = along_flow_signed
 
 
 def _theta(T_K: np.ndarray, p_hpa: np.ndarray) -> np.ndarray:
@@ -185,8 +195,10 @@ def fetch_profile(
 
     Raw east/north wind components are returned (not the along-flow
     projection) so the caller can re-project onto any user-chosen flow
-    direction cheaply without re-downloading. Use :func:`along_flow_positive`
-    to turn ``(u, v, flow_from_deg)`` into the mountain-wave input.
+    direction cheaply without re-downloading. Use :func:`along_flow_signed`
+    to turn ``(u, v, flow_from_deg)`` into the mountain-wave input; wind
+    reversals produce negative values, which the solver handles via the
+    Scorer critical-level clamp rather than silently clipping to zero.
 
     Parameters
     ----------

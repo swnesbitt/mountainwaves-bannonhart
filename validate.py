@@ -49,14 +49,17 @@ def main() -> int:
     # ---- Python reference sanity: uniform atmosphere, w ≈ odd in x near crest
     print("\n[1] Two-layer, uniform atmosphere (pure-Python reference):")
     p = case_uniform()
-    x, z, w = ref.compute_two_layer(**p)
+    x, z, w, up = ref.compute_two_layer(**p)
     assert w.shape == (101, 101)
+    assert up.shape == w.shape
     describe("w (reference)", w)
+    describe("u' (reference)", up)
 
     print("\n[2] Two-layer, trapped-wave case:")
     pt = case_trapped()
-    x, z, w_ref = ref.compute_two_layer(**pt)
+    x, z, w_ref, up_ref = ref.compute_two_layer(**pt)
     describe("w (reference)", w_ref)
+    describe("u' (reference)", up_ref)
 
     # Expect substantial wave amplitude in the lee (x > 0) for the trapped case.
     # Find amplitude in z ~ 1-2 km and x ~ 5-20 km.
@@ -75,10 +78,13 @@ def main() -> int:
 
     if has_rust:
         print("\n[3] Rust vs. Python two-layer (trapped case):")
-        _, _, w_rust = _core.compute_two_layer(**pt)
-        err = np.max(np.abs(w_rust - w_ref))
-        print(f"  max|w_rust - w_python| = {err:.2e}")
-        assert err < 1e-6, f"Rust/Python disagreement too large: {err}"
+        _, _, w_rust, up_rust = _core.compute_two_layer(**pt)
+        err_w = np.max(np.abs(w_rust - w_ref))
+        err_u = np.max(np.abs(up_rust - up_ref))
+        print(f"  max|w_rust  - w_python|  = {err_w:.2e}")
+        print(f"  max|u'_rust - u'_python| = {err_u:.2e}")
+        assert err_w < 1e-6, f"Rust/Python w disagreement too large: {err_w}"
+        assert err_u < 1e-6, f"Rust/Python u' disagreement too large: {err_u}"
     else:
         print("\n[3] (skipped — Rust extension not built)")
 
@@ -98,11 +104,14 @@ def main() -> int:
         n2 = N2_lower if zs[i] <= 3500.0 else N2_upper
         thetas[i] = thetas[i - 1] + thetas[i - 1] * n2 / 9.80665 * dz
 
-    x, z, w_prof = ref.compute_from_profile(
+    prof_out = ref.compute_from_profile(
         zs, us, thetas,
         a=2500.0, ho=500.0, xdom=40000.0, zdom=10000.0,
         mink=0.0, maxk=30.0 / 2500.0, npts=100,
     )
+    # compute_from_profile returns (x, z, w) or (x, z, w, u_prime) depending
+    # on the port-era. Accept either to keep this script robust.
+    x, z, w_prof = prof_out[0], prof_out[1], prof_out[2]
     describe("w (profile solver)", w_prof)
     # Compare RMS to two-layer case — should be broadly similar.
     rms_prof = np.sqrt(np.mean(w_prof ** 2))
@@ -111,8 +120,47 @@ def main() -> int:
     print(f"  rms(profile) / rms(2-layer) = {ratio:.3f}")
     assert 0.3 < ratio < 3.0, "Profile solver RMS differs unreasonably from two-layer reference."
 
+    # ---- Critical-level handling: U crosses zero mid-column.
+    #
+    # Linear Scorer/Taylor-Goldstein is singular at U = 0, so we clamp |U|
+    # at U_FLOOR_SCORER (~0.5 m/s) in both Rust and Python scorer helpers
+    # and surface the detected zero-crossings separately. This test makes
+    # sure (a) the clamp keeps l^2 finite, (b) Rust and Python agree on
+    # the clamped profile, and (c) the `critical_levels` helper correctly
+    # locates the zero crossing.
+    print("\n[5] Critical-level handling (wind reversal at z≈5 km):")
+    zs_c = np.linspace(0.0, 10000.0, 41)
+    us_c = np.linspace(10.0, -10.0, 41)   # zero at index 20, z = 5000 m
+    thetas_c = 290.0 + 0.004 * zs_c       # mildly stable
+    l2_py = ref.scorer_from_profile(zs_c, us_c, thetas_c)
+    assert np.all(np.isfinite(l2_py)), "Python Scorer went non-finite across U=0"
+    crits = ref.critical_levels(zs_c, us_c)
+    print(f"  detected critical levels: {[round(h, 1) for h in crits]} m")
+    assert len(crits) == 1 and abs(crits[0] - 5000.0) < 1e-6, crits
+    # Also make sure the full solver survives a wind-reversal column. Rust
+    # and Python both have to clamp |U| internally for scorer_from_profile;
+    # running compute_from_profile exercises that path end-to-end.
+    out_py = ref.compute_from_profile(
+        zs_c, us_c, thetas_c,
+        a=2500.0, ho=500.0, xdom=40000.0, zdom=10000.0,
+        mink=0.0, maxk=30.0 / 2500.0, npts=80,
+    )
+    w_py = out_py[2]
+    assert np.all(np.isfinite(w_py)), "Python solver went non-finite across U=0"
+    if has_rust:
+        out_rust = _core.compute_from_profile(
+            zs_c, us_c, thetas_c,
+            a=2500.0, ho=500.0, xdom=40000.0, zdom=10000.0,
+            mink=0.0, maxk=30.0 / 2500.0, npts=80,
+        )
+        w_rust_c = out_rust[2]
+        assert np.all(np.isfinite(w_rust_c)), "Rust solver went non-finite across U=0"
+        err = np.max(np.abs(w_rust_c - w_py))
+        print(f"  wind-reversal max|w_rust - w_python| = {err:.2e}")
+        assert err < 1e-4, f"Rust/Python wind-reversal disagreement: {err}"
+
     # ---- Streamline tracer: the first line should sweep over the mountain crest.
-    print("\n[5] Streamline tracer:")
+    print("\n[6] Streamline tracer:")
     lines = streamlines(x, z, 20.0, w_ref, num=10)
     assert len(lines) == 10
     xs0, ys0 = lines[0]

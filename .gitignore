@@ -22,3 +22,5 @@ python/mountain_waves/_core*.dylib
 .vscode/
 *.swp
 .DS_Store
+bluesky_post.md
+linkedin_post.md

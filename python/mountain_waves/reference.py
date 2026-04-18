@@ -129,8 +129,36 @@ def compute_two_layer(
 # ---------------------------------------------------------------------------
 
 
+# Minimum |U| used in the Scorer-parameter denominator. In pure linear
+# theory, U(z) = 0 is a critical level where l² = N²/U² − (U″/U) is
+# singular; linear Scorer/Taylor-Goldstein cannot honestly solve across
+# such a level. In a teaching tool we *want* students to be able to set
+# up a wind-reversal profile and see what happens away from the critical
+# level rather than have the whole solve NaN out. We clamp |U| to this
+# floor (preserving sign) when evaluating the Scorer coefficients. Away
+# from U≈0 this is a no-op; within ±0.5 m/s it caps l² at a large but
+# finite value and the UI emits a "critical level detected" warning so
+# nobody is misled into treating the capped zone as physical.
+U_FLOOR_SCORER = 0.5  # m/s
+
+
+def _u_clamped_for_scorer(uu: float) -> float:
+    """Return ``uu`` with ``|uu|`` lifted to ``U_FLOOR_SCORER``; sign preserved."""
+    if uu >= 0.0:
+        return max(uu, U_FLOOR_SCORER)
+    return min(uu, -U_FLOOR_SCORER)
+
+
 def scorer_from_profile(z_profile, u_profile, theta_profile):
-    """Return Scorer parameter L^2(z) computed from profile data."""
+    """Return Scorer parameter L^2(z) computed from profile data.
+
+    Handles wind reversals (sign changes in ``u_profile``) by clamping the
+    magnitude of ``U`` at ``U_FLOOR_SCORER`` when it evaluates the
+    ``N²/U² − U″/U`` combination. This keeps the solver numerically
+    well-behaved across a critical level (``U = 0``) at the cost of a
+    physically sharp feature there — see the ``critical_levels`` helper
+    below for the companion diagnostic surfaced in the UI.
+    """
     z = np.asarray(z_profile, dtype=float)
     u = np.asarray(u_profile, dtype=float)
     theta = np.asarray(theta_profile, dtype=float)
@@ -163,12 +191,42 @@ def scorer_from_profile(z_profile, u_profile, theta_profile):
             ) / (h1 * h2 * (h1 + h2))
             d2u = 2.0 * (u[i + 1] * h1 - u[i] * (h1 + h2) + u[i - 1] * h2) / (h1 * h2 * (h1 + h2))
         n2 = (G / theta[i]) * dthdz
-        uu = u[i]
-        if abs(uu) > 1e-6:
-            l2[i] = n2 / uu ** 2 - d2u / uu
-        else:
-            l2[i] = 0.0
+        uu = _u_clamped_for_scorer(u[i])
+        l2[i] = n2 / uu ** 2 - d2u / uu
     return l2
+
+
+def critical_levels(z_profile, u_profile):
+    """Return heights (m) where ``u_profile`` crosses zero, linearly interpolated.
+
+    A "critical level" for steady, 2-D, horizontally uniform linear mountain
+    waves is a height where the mean flow vanishes (``U = 0``). Linear
+    Scorer/Taylor-Goldstein theory is singular there — wave energy is
+    absorbed rather than propagated (Booker & Bretherton 1967) — so any
+    result the solver returns *near* a critical level should be read as
+    "this is where the linear model breaks down," not as a prediction.
+
+    Caller (the Dash UI) surfaces the returned heights in a diagnostics
+    badge so students can see where their profile is violating the
+    assumptions of the model.
+    """
+    z = np.asarray(z_profile, dtype=float)
+    u = np.asarray(u_profile, dtype=float)
+    heights = []
+    for i in range(1, z.size):
+        u_prev, u_curr = u[i - 1], u[i]
+        # Treat exact zeros as crossings at that sample.
+        if u_curr == 0.0:
+            heights.append(float(z[i]))
+            continue
+        if u_prev == 0.0:
+            # Already recorded by the previous iteration's "u_curr == 0" branch.
+            continue
+        if (u_prev > 0.0 and u_curr < 0.0) or (u_prev < 0.0 and u_curr > 0.0):
+            # Linear interp to the zero crossing.
+            t = u_prev / (u_prev - u_curr)
+            heights.append(float(z[i - 1] + t * (z[i] - z[i - 1])))
+    return heights
 
 
 def compute_from_profile(

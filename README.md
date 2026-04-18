@@ -273,10 +273,21 @@ is at <https://huggingface.co/spaces/snesbitt/mountain-waves>.
 
 * Scorer, R. S., 1949: *Theory of waves in the lee of mountains*.
   Q. J. R. Meteorol. Soc., **75**, 41–56.
+* Booker, J. R., and F. P. Bretherton, 1967: *The critical layer for
+  internal gravity waves in a shear flow.* J. Fluid Mech., **27**,
+  513–539. Motivates the "Critical layer at 2 km" preset: wave
+  attenuation across `U = 0` scales as `exp(−2π √(Ri − 1/4))` for
+  `Ri > 1/4`.
 * Durran, D. R., 1986: *Mountain Waves*, in *Mesoscale Meteorology and
   Forecasting*, American Meteorological Society, pp. 472–492.
 * Hart, R. E., 1995: *Interactive Model for 2-D Mountain Wave
   Visualization.* Penn State Meteo 574 seminar project.
+* Doyle, J. D., and D. R. Durran, 2002: *The dynamics of mountain-wave-
+  induced rotors.* J. Atmos. Sci., **59**, 186–201. Observational and
+  numerical context for the wind-reversal preset; the T-REX / Sierra
+  Rotors campaign (Grubišić et al. 2008, BAMS **89**, 1513–1533)
+  documented the atmospheric structures this preset is meant to
+  caricature.
 
 ## License
 
