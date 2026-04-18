@@ -11,7 +11,9 @@
 # on via `app_port` in README.md — we use 7860 (the HF default).
 
 # ---------- build stage: compile the Rust extension into a wheel ----------
-FROM rust:1.79-slim AS build
+# rayon 1.12 needs rustc ≥ 1.80; pin a modern stable image so the MSRV of the
+# transitive crate graph (rayon, pyo3, numpy) stays satisfied.
+FROM rust:1.82-slim AS build
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 python3-pip python3-venv python3-dev \
