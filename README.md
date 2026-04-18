@@ -1,3 +1,15 @@
+---
+title: Mountain Waves
+emoji: 🏔️
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+app_port: 7860
+pinned: false
+license: mit
+short_description: Interactive 2-D mountain-wave model (Rust + Dash, after Hart 1995)
+---
+
 # Mountain Waves
 
 An interactive 2-D mountain-wave visualization tool, with a **Rust compute

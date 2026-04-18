@@ -1,0 +1,24 @@
+# Rust build artifacts
+/target/
+
+# Python virtual envs
+.venv/
+venv/
+env/
+
+# Python bytecode / caches
+__pycache__/
+*.py[co]
+*.egg-info/
+.pytest_cache/
+
+# Compiled Rust extensions (platform-specific — we rebuild in CI / Docker)
+python/mountain_waves/_core*.so
+python/mountain_waves/_core*.pyd
+python/mountain_waves/_core*.dylib
+
+# Editors
+.idea/
+.vscode/
+*.swp
+.DS_Store
